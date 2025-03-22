@@ -223,19 +223,27 @@ def generate_sql_query(prompt: str, columns: list, table_name: str) -> str:
         response = client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": "You are a helpful SQL generator."},
+                {"role": "system", "content": "You are a SQL expert. Return ONLY the SQL query, no explanations or comments."},
                 {"role": "user", "content": msg}
             ],
             temperature=0
         )
         # Extract the returned SQL (the model should return only SQL)
         sql_query = response.choices[0].message.content.strip()
-        # Remove any leftover fences
+        
+        # Clean up the SQL query
         sql_query = sql_query.replace("```sql", "").replace("```", "")
-        return sql_query
+        sql_query = sql_query.split(";")[0]  # Take only the first statement before any semicolon
+        sql_query = "\n".join(line for line in sql_query.split("\n") if not line.strip().startswith("--"))  # Remove SQL comments
+        
+        # Validate that it's a basic SQL query
+        if not any(keyword in sql_query.lower() for keyword in ["select", "count", "avg", "sum", "min", "max"]):
+            return "SELECT * FROM data_table"
+            
+        return sql_query.strip()
     except Exception as e:
         st.session_state.debug_messages.append(f"Error generating SQL: {str(e)}")
-        return f"Error generating SQL: {str(e)}"
+        return "SELECT * FROM data_table"  # Safe fallback query
 
 def analyze_data(data: str, prompt: str) -> str:
     """
