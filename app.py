@@ -48,7 +48,39 @@ def execute_pandas_query(df: pd.DataFrame, sql_query: str) -> pd.DataFrame:
     query = sql_query.lower()
     
     try:
-        if "select * from" in query:
+        if "select count(*)" in query:
+            # Handle COUNT(*) aggregation
+            if "where" in query:
+                condition = query.split("where")[1].strip()
+                if ">" in condition:
+                    col, val = condition.split(">")
+                    col = col.strip()
+                    val = float(val.strip())
+                    result_df = pd.DataFrame({'count': [len(df[df[col] > val])]})
+                elif "<" in condition:
+                    col, val = condition.split("<")
+                    col = col.strip()
+                    val = float(val.strip())
+                    result_df = pd.DataFrame({'count': [len(df[df[col] < val])]})
+                elif "=" in condition:
+                    col, val = condition.split("=")
+                    col = col.strip()
+                    val = val.strip().strip("'").strip('"')
+                    result_df = pd.DataFrame({'count': [len(df[df[col] == val])]})
+            else:
+                result_df = pd.DataFrame({'count': [len(df)]})
+            
+            # Check for multiple aggregations
+            if "sum(case" in query:
+                # Extract the column name from CASE statement
+                case_col = query.split("when")[1].split(">")[0].strip()
+                # Count values > 0
+                case_count = len(df[df[case_col] > 0])
+                result_df['sum'] = case_count
+            
+            return result_df
+            
+        elif "select * from" in query:
             return df
         
         if "where" in query:
@@ -150,9 +182,24 @@ def lookup_data(prompt: str) -> str:
 # --------------------------
 # PROMPTS
 # --------------------------
-SYSTEM_PROMPT = """You are a data analyst. Answer questions about the dataset using the available functions: lookup_data for SQL queries and analyze_data for analysis."""
+SYSTEM_PROMPT = """You are a data analyst. For data queries, you must first get the data using lookup_data (which requires SQL), then analyze it using analyze_data."""
 
-SQL_GENERATION_PROMPT = """Generate SQL query for: "{prompt}". Available columns: {columns}. Table name: {table_name}."""
+SQL_GENERATION_PROMPT = """Write a SQL query to answer: "{prompt}"
+Available columns: {columns}
+Table name: {table_name}
+
+IMPORTANT:
+- Return ONLY the SQL query, no explanations
+- Use exact column names as provided
+- For counting or aggregations, use proper SQL syntax (COUNT(*), SUM(), etc.)
+- For percentages, use COUNT(*) and SUM() with CASE statements
+- Example format for percentage queries:
+  SELECT 
+    COUNT(*) as total,
+    SUM(CASE WHEN condition THEN 1 ELSE 0 END) as matching_count
+  FROM table_name
+
+Return only the SQL query:"""
 
 DATA_ANALYSIS_PROMPT = """Analyze: {data}
 Question: "{prompt}"
@@ -164,7 +211,7 @@ Show calculations for percentages: (numerator/denominator)*100."""
 
 def generate_sql_query(prompt: str, columns: list, table_name: str) -> str:
     """
-    Generate a valid SQL query for DuckDB based on the user's prompt.
+    Generate a valid SQL query based on the user's prompt.
     """
     global client
     if client is None:
@@ -176,32 +223,32 @@ def generate_sql_query(prompt: str, columns: list, table_name: str) -> str:
         columns=", ".join(columns),
         table_name=table_name
     )
-    # Call ChatCompletion to get the SQL query
+    
     try:
         response = client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": "You are a SQL expert. Return ONLY the SQL query, no explanations or comments."},
+                {"role": "system", "content": "You are a SQL expert. Return ONLY the SQL query, no explanations. Use proper SQL syntax for aggregations and calculations."},
                 {"role": "user", "content": msg}
             ],
             temperature=0
         )
-        # Extract the returned SQL (the model should return only SQL)
+        
         sql_query = response.choices[0].message.content.strip()
         
         # Clean up the SQL query
         sql_query = sql_query.replace("```sql", "").replace("```", "")
         sql_query = sql_query.split(";")[0]  # Take only the first statement before any semicolon
-        sql_query = "\n".join(line for line in sql_query.split("\n") if not line.strip().startswith("--"))  # Remove SQL comments
+        sql_query = "\n".join(line for line in sql_query.split("\n") if not line.strip().startswith("--"))
         
-        # Validate that it's a basic SQL query
+        # Validate that it's a proper SQL query
         if not any(keyword in sql_query.lower() for keyword in ["select", "count", "avg", "sum", "min", "max"]):
-            return "SELECT * FROM data_table"
+            return "SELECT COUNT(*) as total FROM data_table"  # Safe fallback for counting
             
         return sql_query.strip()
     except Exception as e:
         st.session_state.debug_messages.append(f"Error generating SQL: {str(e)}")
-        return "SELECT * FROM data_table"  # Safe fallback query
+        return "SELECT COUNT(*) as total FROM data_table"  # Safe fallback query
 
 def analyze_data(data: str, prompt: str) -> str:
     """
@@ -311,12 +358,9 @@ def call_function(function_name, arguments):
             
             # If the data looks like it's just column names and values, expand it
             if ":" in arguments['data'] and len(arguments['data'].split("\n")) <= 2:
-                st.session_state.debug_messages.append("Data appears to be in simplified format, expanding it")
-                
-                # Try to reconstruct from data_result if available
-                if st.session_state.data_result is not None and not st.session_state.data_result.empty:
-                    full_data = st.session_state.data_result.to_string(index=False)
-                    arguments['data'] = full_data
+                st.session_state.debug_messages.append("Data appears to be in simplified format")
+                # Do not expand the data, use it as is
+                return analyze_data(**arguments)
         
         return analyze_data(**arguments)
     else:
