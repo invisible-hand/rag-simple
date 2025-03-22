@@ -115,31 +115,6 @@ def lookup_data(prompt: str) -> str:
     
     columns_str = ", ".join(columns_info)
     
-    # Check if this is a query about mortgages or age
-    if "mortgage" in prompt.lower() or "age" in prompt.lower():
-        diagnostic_info = "\nDiagnostic information to help with your query:\n"
-        
-        # Check if 'Age' or similar column exists
-        age_cols = [col for col in df.columns if 'age' in col.lower()]
-        if age_cols:
-            for age_col in age_cols:
-                diagnostic_info += f"\n{age_col} column statistics:\n"
-                diagnostic_info += f"- Min: {df[age_col].min()}\n"
-                diagnostic_info += f"- Max: {df[age_col].max()}\n"
-                diagnostic_info += f"- Mean: {df[age_col].mean()}\n"
-                diagnostic_info += f"- Number of people over 40: {(df[age_col] > 40).sum()}\n"
-        
-        # Check if 'Mortgage' or similar column exists
-        mortgage_cols = [col for col in df.columns if 'mortgage' in col.lower()]
-        if mortgage_cols:
-            for mortgage_col in mortgage_cols:
-                value_counts = df[mortgage_col].value_counts()
-                diagnostic_info += f"\n{mortgage_col} value counts:\n"
-                for value, count in value_counts.items():
-                    diagnostic_info += f"- {value}: {count}\n"
-        
-        prompt = f"{prompt}\n\n{diagnostic_info}"
-    
     # Generate the SQL query from the prompt
     sql_query = generate_sql_query(prompt, columns_info, "data_table")
     st.session_state.last_sql_query = sql_query
@@ -149,45 +124,28 @@ def lookup_data(prompt: str) -> str:
         result = execute_pandas_query(df, sql_query)
         
         if result.empty:
-            sample_data = df.head(5).to_string(index=False)
-            return f"""The query returned no results. Here's some information that might help:
-            
-1. Available columns: {columns_str}
-2. Sample data (first 5 rows):
-{sample_data}
-
-Please try a different query or check if the conditions in your query match the data."""
+            return "The query returned no results."
         
         st.session_state.data_result = result
         
-        # Format the results
-        result_info = f"Query returned {result.shape[0]} rows and {result.shape[1]} columns.\n\n"
-        
-        if result.shape[0] > 100:
-            result_info += f"Showing first 100 rows as sample:\n\n"
-            display_result = result.head(100)
-            text_result = result_info + display_result.to_string(index=False)
+        # Format the results more efficiently
+        if result.shape[0] == 1:  # For single row results (like aggregations)
+            # Convert to key-value pairs for better readability
+            text_result = "\n".join([f"{col}: {result.iloc[0][col]}" for col in result.columns])
         else:
-            text_result = result_info + result.to_string(index=False)
-        
-        # Add summary statistics for numeric columns
-        numeric_cols = result.select_dtypes(include=['number']).columns
-        if len(numeric_cols) > 0:
-            stats = result[numeric_cols].describe().to_string()
-            text_result += f"\n\nSummary statistics for numeric columns:\n{stats}"
+            # For multiple rows, show summary and limited sample
+            text_result = f"Query returned {result.shape[0]} rows and {result.shape[1]} columns.\n\n"
+            if result.shape[0] > 5:
+                sample = result.head(5)
+                text_result += "First 5 rows of results:\n"
+            else:
+                sample = result
+            text_result += sample.to_string(index=False)
         
         return text_result
         
     except Exception as e:
-        error_msg = str(e)
-        sample_data = df.head(5).to_string(index=False)
-        return f"""Error executing query: {error_msg}
-        
-Available columns: {columns_str}
-Sample data (first 5 rows):
-{sample_data}
-
-Please try a different query that matches the actual column names and data types."""
+        return f"Error executing query: {str(e)}"
 
 # --------------------------
 # PROMPTS
@@ -256,79 +214,42 @@ def analyze_data(data: str, prompt: str) -> str:
     if not data or data.strip() == "":
         return "No data available to analyze."
     
-    # Ensure the data is properly formatted for analysis
-    # Check if we have the data_result in session state
-    if st.session_state.data_result is not None and not st.session_state.data_result.empty:
-        # Format the data in a more structured way
-        formatted_data = "Data for analysis:\n\n"
-        
-        # Add the raw data as a table
-        formatted_data += data
-        
-        # If it's a simple query with just a few values, make it extra clear
-        if st.session_state.data_result.shape[0] == 1 and st.session_state.data_result.shape[1] <= 5:
-            formatted_data += "\n\nKey values extracted from the data:\n"
-            for col in st.session_state.data_result.columns:
-                value = st.session_state.data_result.iloc[0][col]
-                formatted_data += f"- {col}: {value}\n"
+    # Format the data more efficiently
+    formatted_data = data
+    
+    # If we have percentage calculation request
+    if "percentage" in prompt.lower() and st.session_state.data_result is not None:
+        if st.session_state.data_result.shape[0] == 1:
+            # Try to identify columns for percentage calculation
+            cols = st.session_state.data_result.columns
+            numeric_cols = st.session_state.data_result.select_dtypes(include=['number']).columns
             
-            # If this is a percentage calculation, help with the math
-            if "percentage" in prompt.lower() and st.session_state.data_result.shape[1] >= 2:
-                # Try to identify numerator and denominator columns
-                cols = st.session_state.data_result.columns
-                if len(cols) >= 2:
-                    total_col = None
-                    part_col = None
-                    
-                    # Look for column names that suggest totals or parts
-                    for col in cols:
-                        col_lower = col.lower()
-                        if "total" in col_lower or "all" in col_lower or "count" in col_lower:
-                            total_col = col
-                        elif "with" in col_lower or "has" in col_lower or "yes" in col_lower:
-                            part_col = col
-                    
-                    # If we couldn't identify by name, use the first two columns
-                    if total_col is None or part_col is None:
-                        if "total" in cols[0].lower() and "with" in cols[1].lower():
-                            total_col, part_col = cols[0], cols[1]
-                        else:
-                            total_col, part_col = cols[0], cols[1]
-                    
-                    # Calculate the percentage
-                    total_value = float(st.session_state.data_result.iloc[0][total_col])
-                    part_value = float(st.session_state.data_result.iloc[0][part_col])
-                    
-                    if total_value > 0:
-                        percentage = (part_value / total_value) * 100
-                        formatted_data += f"\nCalculation: ({part_value} / {total_value}) * 100 = {percentage:.2f}%\n"
-                        formatted_data += f"\nTherefore, {percentage:.2f}% of the total have the specified attribute.\n"
-        
-        data = formatted_data
+            if len(numeric_cols) >= 2:
+                total_col = numeric_cols[0]
+                part_col = numeric_cols[1]
+                
+                total_value = float(st.session_state.data_result.iloc[0][total_col])
+                part_value = float(st.session_state.data_result.iloc[0][part_col])
+                
+                if total_value > 0:
+                    percentage = (part_value / total_value) * 100
+                    formatted_data += f"\n\nPercentage calculation:\n"
+                    formatted_data += f"({part_value} / {total_value}) * 100 = {percentage:.2f}%"
     
     # Format the analysis prompt
-    msg = DATA_ANALYSIS_PROMPT.format(data=data, prompt=prompt)
-    
-    # If the formatted prompt is too large, truncate it but keep the important parts
-    if len(msg) > 15000:  # Adjust this threshold as needed
-        st.session_state.debug_messages.append(f"Warning: Analysis prompt is very large ({len(msg)} chars), truncating...")
-        # Keep the beginning (instructions and data info) and the end (the actual question)
-        beginning = msg[:5000]  # First 5000 chars
-        end = msg[-5000:]       # Last 5000 chars
-        msg = beginning + "\n...[data truncated due to size]...\n" + end
+    msg = DATA_ANALYSIS_PROMPT.format(data=formatted_data, prompt=prompt)
     
     try:
         response = client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": "You are an expert data analyst."},
+                {"role": "system", "content": "You are an expert data analyst. Provide clear, concise analysis."},
                 {"role": "user", "content": msg}
             ],
             temperature=0
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        st.session_state.debug_messages.append(f"Error analyzing data: {str(e)}")
         return f"Error analyzing data: {str(e)}"
 
 
