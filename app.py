@@ -29,7 +29,7 @@ if 'OPENAI_API_KEY' not in st.session_state:
 client = None
 
 # Set model name
-MODEL = "gpt-4"  # Changed to a standard model name
+MODEL = "gpt-4o-mini"  # Using GPT-4 Optimized Mini model
 
 # Example queries for demo mode
 EXAMPLE_QUERIES = [
@@ -192,55 +192,13 @@ Please try a different query that matches the actual column names and data types
 # --------------------------
 # PROMPTS
 # --------------------------
-SYSTEM_PROMPT = """
-You are a helpful assistant that can answer questions about an uploaded dataset.
-You have two available functions you can call:
-1) lookup_data: to perform SQL queries on the data
-2) analyze_data: to analyze query results
+SYSTEM_PROMPT = """You are a data analyst. Answer questions about the dataset using the available functions: lookup_data for SQL queries and analyze_data for analysis."""
 
-Make sure to follow this usage pattern:
-- If you need data from the dataset, call lookup_data with the user's prompt.
-- Then, call analyze_data with the data you retrieved plus the user's prompt.
-- Do NOT make assumptions about table names or column names. The table name is 'data_table'.
-- Do NOT use 'dataset' as the table name.
-- Wait for the results of lookup_data before making conclusions about the data.
+SQL_GENERATION_PROMPT = """Generate SQL query for: "{prompt}". Available columns: {columns}. Table name: {table_name}."""
 
-Otherwise, provide your final answer to the user.
-"""
-
-SQL_GENERATION_PROMPT = """
-Generate a valid SQL query that answers the user's prompt:
-"{prompt}"
-
-The available columns are: {columns}
-The table name is: {table_name}
-
-IMPORTANT:
-- Return only the SQL statement, nothing else.
-- Use the exact column names provided above.
-- The table name is '{table_name}', not 'dataset' or any other name.
-- Do not assume column names or data types that aren't listed above.
-"""
-
-DATA_ANALYSIS_PROMPT = """
-Analyze the following data:
-{data}
-
-Answer the user's question:
-"{prompt}"
-
-Be thorough in your analysis. Mention any relevant statistics or insights.
-If the data contains numerical values that can be used to calculate percentages or other metrics,
-perform those calculations and show your work.
-
-For percentage calculations:
-1. Identify the total count (denominator)
-2. Identify the specific count (numerator)
-3. Divide the specific count by the total count and multiply by 100
-4. Present the result as a percentage with appropriate context
-
-Your analysis should be clear, accurate, and directly answer the user's question.
-"""
+DATA_ANALYSIS_PROMPT = """Analyze: {data}
+Question: "{prompt}"
+Show calculations for percentages: (numerator/denominator)*100."""
 
 # --------------------------
 # FUNCTIONS (for function calling)
