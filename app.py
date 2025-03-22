@@ -26,10 +26,10 @@ MODEL = "gpt-4o-mini"
 def execute_sql(sql_query: str) -> pd.DataFrame:
     """Execute SQL query using pandasql"""
     try:
-        # Create a function that executes SQL using the current dataframe
-        pysqldf = lambda q: sqldf(q, globals())
-        # Execute the query
-        result = pysqldf(sql_query)
+        # Create local namespace with our dataframe
+        local_namespace = {'df': st.session_state.df}
+        # Execute the query with the local namespace
+        result = sqldf(sql_query, local_namespace)
         return result
     except Exception as e:
         st.error(f"Error executing SQL: {str(e)}")
@@ -50,7 +50,7 @@ def lookup_data(prompt: str) -> str:
             model=MODEL,
             messages=[
                 {"role": "system", "content": "You are a SQL expert. Generate SQL queries for data analysis. Return ONLY the SQL query, no explanations."},
-                {"role": "user", "content": f"Write a SQL query to {prompt}. Available columns: {', '.join(cols_info)}. The table name is 'df'."}
+                {"role": "user", "content": f"Write a SQL query to {prompt}. Available columns: {', '.join(cols_info)}. Use table name 'df'."}
             ],
             temperature=0
         )
